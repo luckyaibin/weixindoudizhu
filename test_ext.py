@@ -3,7 +3,7 @@
 
 from wxbot import *
 from card import *
-
+from card_ext import *
 def on_char_room_msg(type,msg):
     print(msg)
 
@@ -17,9 +17,6 @@ class GameRoom():
         self.bot = None
         #房间状态
         self.room_status = 0 #0,什么都不做,1,斗地主叫地主状态,2,出牌状态
-        self.secret_code_start=u'斗地主';
-        self.secret_code_over=u'结束斗地主';
-
         #游戏状态
         self.game_status = 0 #0,准备进入斗地主状态,1,正在斗地主
         self.cmd_game_start = u'开局'
@@ -31,11 +28,11 @@ class GameRoom():
 
         #######################重新发牌之后需要复原这几个的值
         self.curr_call_dizhu_max_score = 0#当前叫地主的最高分
-        self.curr_call_dizhu_max_score_user_num=0
-        self.re_dispatch_card_user_num = 0#重新发牌之后最先叫牌的用户,这个不需要清空
+        self.curr_call_dizhu_max_score_user_serial=0
+        self.new_round_putcard_serial = 0#重新发牌之后最先叫牌的用户,这个不需要清空
 
         self.last_putcards = None   #前面人出的牌(也可能是自己出的,然后其他人不出,接下来仍然是自己出牌
-        self.last_putcards_player_num = None#前面出牌人的编号,0,1,2
+        self.last_putcards_player_serial = None#前面出牌人的编号,0,1,2
 
         self.curr_putcard_serial = 0#当前该哪个玩家出牌了,第一个加入的人先叫地主!
 
@@ -49,17 +46,17 @@ class GameRoom():
         self.last_game_active_time = int(time.time())
         self.players = {}
 
-    def create_room(self,bot,room_id,uid,name):
+    def CreateRoom(self,bot,room_id,uid,name):
         self.bot = bot
         self.room_id = room_id
         self.owner_id = uid
         self.owner_name = name
-        #self.__join_game(uid,name)
         self.room_status = 1;
 
-    def destroy_room(self,bot,uid):
+    def DestroyRoom(self,bot,uid):
         if self.owner_id == uid:
-            self.__leave_game(uid)
+            self.__init__()
+            return True
 
     def system_destroy_room(self):
         self.__init__()
@@ -77,25 +74,27 @@ class GameRoom():
             self.__init__()
         else:
             self.players.pop(uid)
-    def is_user_in_room(self,uid):
-        if self.players.has_key(uid):
-            return 1
-        else:
-            return 0
+
     def send_room_msg(self,msg,gid):
         self.bot.send_msg_by_uid( u'[' + msg + u']',gid)
 
     def send_personal_msg(self,msg,uid):
         self.bot.send_msg_by_uid(u'[' + msg + u']',uid)
 
-    def get_player_by_number(self,number):
+    def IsPlayerInRoomByUid(self,uid):
+        if not self.players.has_key(uid):
+            return  False
+        return True
+
+    #根据玩家的序号获取到玩家,按照加入进来的书序,编号为0,1,2..
+    def GetPlayerBySerial(self,number):
         for playerid in self.players:
             player = self.players[playerid]
             player_number = player['number']
             if player_number == number:
                 return player
         return None
-
+    #根据玩家id获取到玩家
     def get_player_by_uid(self,uid):
         for playerid in self.players:
             player = self.players[playerid]
@@ -103,72 +102,72 @@ class GameRoom():
             if player_uid == uid:
                 return player
         return None
-    def card_list_to_dict(self,list):
-         cards={}
-         for point in list:
-            if not cards.has_key(point):
-                cards[point] = {'count': 1}
-            else:
-                cards[point]['count'] = cards[point]['count'] + 1
-         return cards
-    def dispatch_cards(self,gid):
-         #开始发牌
-        card0,card1,card2,left = shuffle_card()
-        self.left_card_for_dizhu = left #保存下来,留给地主
 
+    #负责发牌到每个人手里
+    def DispatchCards(self,gid):
+         #开始发牌
+        card_dict0,card_dict1,card_dict2,card_dict_left = ShuffleCard()
+        self.left_card_for_dizhu = card_dict_left #保存下来,留给地主
+
+        card_dicts=[card_dict0,card_dict1,card_dict2]
         flag = False
-        self.left = left;
         for playerid in self.players:
             player = self.players[playerid]
             name = player['name']
-            if player['number'] == 0:
-                player['usercard_dict'] = self.card_list_to_dict(card0)
-                card_str= card_list_to_str(card0)
-                msg = u'玩家:'+name + ':' + card_str
-                if flag:
-                    self.send_room_msg(msg,gid)
-                else:
-                    self.send_personal_msg(msg,playerid)
+            card_dict = card_dicts[player['number']]
+            player['usercard_dict'] = card_dict
+            card_str= CardDictToStr(card_dict)
+            msg = u'玩家'+name + u'牌:' + card_str
+            if flag:
+                self.send_room_msg(msg,gid)
+            else:
+                self.send_personal_msg(msg,playerid)
 
-            if player['number'] == 1:
-                player['usercard_dict'] = self.card_list_to_dict(card1)
-                card_str= card_list_to_str(card1)
-                msg = u'玩家:'+name + ':' + card_str
-                if flag:
-                    self.send_room_msg(msg,gid)
-                else:
-                    self.send_personal_msg(msg,playerid)
+    #选出了地主之后
+    def ChooseOutDizhu(self):
+        dizhu = self.GetPlayerBySerial(self.curr_putcard_serial % 3)
+        dizhu['title']=u'地主'
+        nongmin = self.GetPlayerBySerial( (self.curr_putcard_serial+1) % 3)
+        nongmin['title']=u'农民1'
+        nongmin = self.GetPlayerBySerial( (self.curr_putcard_serial+2) % 3)
+        nongmin['title']=u'农民2'
+        left_card_for_dizhu= CardDictToStr(self.left_card_for_dizhu)
 
-            if player['number'] == 2:
-                player['usercard_dict'] = self.card_list_to_dict(card2)
-                card_str= card_list_to_str(card2)
-                msg = u'玩家:'+name + ':' + card_str
-                if flag:
-                    self.send_room_msg(msg,gid)
-                else:
-                    self.send_personal_msg(msg,playerid)
+        #把剩余牌交给地主手里
+        for point in self.left_card_for_dizhu:
+            if dizhu['usercard_dict'].has_key(point):
+                dizhu['usercard_dict'][point]["count"] +=1
+            else:
+                dizhu['usercard_dict'][point] = {"count":1}
 
-    def handle_msg(self,name,uid,gid,content):
+    def RoomHandleMessage(self,name,uid,gid,content):
         if self.game_status == 0:
-            if not self.players.has_key(uid):#没满,但不在房间里,需要加入
+            if not self.IsPlayerInRoomByUid(uid):#没满,但不在房间里,需要加入
                 if content == self.cmd_game_start:#开局
                     self.__join_game(uid,name)
                     self.send_room_msg(name + u'加入了斗地主房间,还差' + unicode(3 - len(self.players)) + u'个人',gid)
                     if len(self.players) == 3:
                         self.game_status = 1 #加入后人满了,可以叫发牌,然后叫地主
-                        self.dispatch_cards(gid)
-                        first_call_dizhu_player = self.get_player_by_number(0)
-                        self.send_room_msg(u'发牌完毕,' +first_call_dizhu_player['name'] + u'请先叫地主.',gid)
+                        self.DispatchCards(gid)
+                        #新一局的第一个玩家序号
+                        self.curr_putcard_serial = self.new_round_putcard_serial
+                        first_call_dizhu_player = self.GetPlayerBySerial(0)#第一次开局成功是第一个加入的人先叫地主
+                        name = first_call_dizhu_player['name']
+                        uid = first_call_dizhu_player['uid']
+                        self.send_personal_msg(u'发牌完毕,' + name + u'请先叫地主.',uid)
                 else:
-                    self.send_room_msg(u'[别人正在准备斗地主,先等等]',gid)
+                    #self.send_room_msg(u'[别人正在准备斗地主,先等等]',gid)
+                    print(u'[别人正在准备斗地主,先等等]')
             else:#m没满,但是在房间里,需要等其他人加入才行
-                self.send_room_msg(u'[你们都快点加入啊]',gid)
+                #self.send_room_msg(u'[你们都快点加入啊]',gid)
+                 print(u'你们都快点加入啊')
         elif self.game_status == 1:
-            if(not self.players.has_key(uid)):#不在房间里
-                self.send_room_msg(u'[别人正在准备斗地主,先等等]',gid)
-            elif self.players[uid]['number'] == (self.curr_putcard_serial % 3):
+            if(not self.IsPlayerInRoomByUid(uid)):#不在房间里
+                #self.send_room_msg(u'[别人正在准备斗地主,先等等]',gid)
+                print(u'[别人正在准备斗地主,先等等]')
+            elif self.players[uid]['number'] == self.curr_putcard_serial:
                 if content != u'1分' and content !=u'2分' and content !=u'3分' and content !=u'不叫':
-                    self.send_room_msg( name + u'请回答:1分,2分,3分或者不叫',gid)
+                    self.send_personal_msg( name + u'请回答:1分,2分,3分或者不叫',uid)
                     return
 
                 score = 0
@@ -181,72 +180,45 @@ class GameRoom():
                 elif content==u'不叫':
                     score=0
 
-                #self.re_dispatch_card_user_num + 2 是每次叫地主最后一个人的序号
-                if self.curr_putcard_serial != self.re_dispatch_card_user_num + 2:
+                #self.new_round_putcard_serial + 2 是每次叫地主最后一个人的序号
+                if self.curr_putcard_serial != (self.new_round_putcard_serial + 2)%3:
                     if score==0:#不叫
                         self.curr_putcard_serial+=1
+                        self.curr_putcard_serial %= 3
                         return
                     elif score <= self.curr_call_dizhu_max_score :
-                        self.send_room_msg( name + u',要么不叫,要么请喊比'+ unicode(self.curr_call_dizhu_max_score)+u'高的分',gid)
+                        self.send_personal_msg( name + u',要么不叫,要么请喊比'+ unicode(self.curr_call_dizhu_max_score)+u'高的分',uid)
                         return
                     elif score == 3:#确定了地主
-                        dizhu = self.get_player_by_number(self.curr_putcard_serial % 3)
-                        dizhu['title']=u'地主'
-                        nongmin = self.get_player_by_number( (self.curr_putcard_serial+1) % 3)
-                        nongmin['title']=u'农民1'
-                        nongmin = self.get_player_by_number( (self.curr_putcard_serial+2) % 3)
-                        nongmin['title']=u'农民2'
-                        left_card_for_dizhu= card_list_to_str(self.left_card_for_dizhu)
-
-                        #把剩余牌交给地主手里
-                        for point in self.left_card_for_dizhu:
-                            if dizhu['usercard_dict'].has_key(point):
-                                dizhu['usercard_dict'][point]["count"] +=1
-                            else:
-                                dizhu['usercard_dict'][point] = {"count":1}
-
                         #self.send_personal_msg(card_str,playerid)
-                        msg = dizhu['name'] + u'[' + dizhu['title'] + u']的三张牌是:' + left_card_for_dizhu
+                        self.ChooseOutDizhu()
+                        dizhu = self.GetPlayerBySerial(self.curr_putcard_serial % 3)
+                        msg = dizhu['name'] + u'[' + dizhu['title'] + u']的三张牌是:' + CardDictToStr(self.left_card_for_dizhu)
                         self.send_room_msg(msg,gid)
                         self.game_status = 2
                         return
                     else:
                         self.curr_call_dizhu_max_score = score#记录当前最高分
-                        self.curr_call_dizhu_max_score_user_num = self.curr_putcard_serial#记录当前出最高分的人的序号
+                        self.curr_call_dizhu_max_score_user_serial = self.curr_putcard_serial#记录当前出最高分的人的序号
                         self.curr_putcard_serial+=1
+                        self.curr_putcard_serial %= 3
                         return
                 else:#最后一个人叫了,如果不叫,判断之前有人叫了么,没有就重新发牌
                     if self.curr_call_dizhu_max_score == 0:#没人叫地主,重新发牌
                         self.game_status = 1
-                        self.dispatch_cards(gid)
-                        self.re_dispatch_card_user_num += 1#修改下一局的出牌顺序
-                        next_first_player = self.get_player_by_number(self.re_dispatch_card_user_num % 3)
+                        self.DispatchCards(gid)
+                        self.new_round_putcard_serial += 1#修改下一局的出牌顺序
+                        self.new_round_putcard_serial %=3
+                        next_first_player = self.GetPlayerBySerial(self.new_round_putcard_serial)
+                         #修改出牌人顺序
+                        self.curr_putcard_serial = self.new_round_putcard_serial
                         self.send_room_msg(u'上一局没人叫地主,重新发牌了,这次轮到' + next_first_player['name']+u'先叫地主',gid)
-
-                        #修改出牌人顺序
-                        self.curr_putcard_serial = self.re_dispatch_card_user_num
                     else:#确定地主,然后翻出地主的牌
-
                         if score < self.curr_call_dizhu_max_score:
-                            self.curr_putcard_serial= self.curr_call_dizhu_max_score_user_num#地主为上次最高分的人
-                        dizhu = self.get_player_by_number(self.curr_putcard_serial % 3)
-                        dizhu['title']=u'地主'
-                        nongmin = self.get_player_by_number( (self.curr_putcard_serial+1) % 3)
-                        nongmin['title']=u'农民1'
-                        nongmin = self.get_player_by_number( (self.curr_putcard_serial+2) % 3)
-                        nongmin['title']=u'农民2'
-                        left_card_for_dizhu= card_list_to_str(self.left_card_for_dizhu)
-
-                        #把剩余牌交给地主手里
-                        for point in self.left_card_for_dizhu:
-                            if dizhu['usercard_dict'].has_key(point):
-                                dizhu['usercard_dict'][point]["count"] +=1
-                            else:
-                                dizhu['usercard_dict'][point] = {"count":1}
-
-                        self.last_putcards = None
-                        #self.send_personal_msg(card_str,playerid)
-                        msg = dizhu['name'] + u'[' + dizhu['title'] + u']的三张牌是:' + left_card_for_dizhu
+                            self.curr_putcard_serial= self.curr_call_dizhu_max_score_user_serial#地主为最高分的人,接下来第一个出牌
+                        self.ChooseOutDizhu()
+                        dizhu = self.GetPlayerBySerial(self.curr_putcard_serial % 3)
+                        msg = dizhu['name'] + u'[' + dizhu['title'] + u']的三张牌是:' + CardDictToStr(self.left_card_for_dizhu)
                         self.send_room_msg(msg,gid)
                         self.game_status = 2
                         return
@@ -258,157 +230,138 @@ class GameRoom():
                 self.send_room_msg(u'[别人正在准备斗地主,先等等]',gid)
             elif content == self.cmd_game_end:#结束
                 self.__leave_game(uid);
+                self.send_room_msg(name + u'离开了斗地主房间,还差' + unicode(3 - len(self.players)) + u'个人,大家快加入',gid)
                 self.game_status = 0;#人不够了..
             else:
-                self.__handle_card(uid,name,content,gid)
+                #正常的进入游戏的出牌逻辑
+                self.RoomHandlePlayingCard(uid,name,content,gid)
                 self.last_game_active_time = int(time.time())
 
     def is_valid_card(self,cards):
         print('')
 
-    def __handle_card(self,uid,name,content,gid):
+    def RoomHandlePlayingCard(self,uid,name,content,gid):
         print(content)
         #当前该出牌的人
-        curr_output_player=self.get_player_by_number(self.curr_putcard_serial % 3)
-        is_content_cards = input_is_card_string(content,card_filter)
-        if is_content_cards:#打出来的内容是扑克牌字符串
-            if self.players[uid]['number'] != self.curr_putcard_serial % 3:#没到出牌顺序呢
-                self.send_room_msg(name + u'还没轮到你出牌呢,该轮到' + curr_output_player['name'] + u'出牌.',gid)
-            else:#处理扑克牌格式,并和前一位出的扑克牌比较大小
+        curr_output_player=self.GetPlayerBySerial(self.curr_putcard_serial)
+        is_content_cards = InputIsCardString(content)
 
-                #玩家出牌的列表dict
-                cards_output_dict = card_point_count_uniform(content)
-
-                #检测是不是合理的牌,555+67这种不正确的直接提示错误的出牌
-                type=get_card_type(cards_output_dict)
-                if type[:2]==u'错误':
-                    self.send_room_msg(name + u'你出的牌:' + type,gid)
-                    return
-                #玩家拥有的牌数,list
-                player_own_card_dict = self.players[uid]['usercard_dict']
-
-
-                print_tree(player_own_card_dict)
-
-                print_tree(cards_output_dict)
-
-                #检查牌是不是自己有的牌
-                is_card_engouth = True
-                for k in cards_output_dict:
-                    c = cards_output_dict[k]
-                    #玩家有的牌的列表里的数量是否大于等于打出的牌
-                    if player_own_card_dict.has_key(k) and player_own_card_dict[k]['count'] >= c['count']:
-                        print('ok')
-                    else:
-                        is_card_engouth = False
-                        break
-
-                #出的是自己有的牌
-                if is_card_engouth:
-                    #其他人都不出,自己再次出牌,不需要比较,直接出牌就是了
-                    self_again = (self.last_putcards_player_num == curr_output_player['number'])
-                    if self.last_putcards and (not self_again):#有上一家出的牌,并且不是自己出的,才需要比较
-                        com_result = compare_cards(cards_output_dict,self.last_putcards)
-                        if com_result != -1 and com_result != 0 and com_result != 1:
-                            self.send_room_msg(name + u'你出的牌:' + com_result,gid)
-                        if com_result <= 0: #牌没有上一家出的大
-                            str=u''
-                            for k in self.last_putcards:
-                                count = self.last_putcards[k]['count']
-                                for i in range(0,count):
-                                    str +=REVERSE_CARD_DICT[k]
-
-                            self.send_room_msg(name + u'你出的牌管不起..' + str,gid)
-                        else:
-                            #扣牌
-                            for c in player_own_card_dict:#遍历玩家的牌
-                                data = player_own_card_dict[c]
-                                output_count = 0 #如果出了这张牌,就减去对应的数量
-                                if cards_output_dict.has_key(c):
-                                    output_count=cards_output_dict[c]['count']
-                                if output_count > 0:
-                                    data['count'] -= output_count
-
-                            #剩余的牌,私聊发给玩家
-                            left_list=[]
-                            for c in player_own_card_dict:
-                                data = player_own_card_dict[c]
-                                count = data['count']
-                                for i in range(0,count):
-                                    left_list.append(c)
-                            left_str = card_list_to_str(left_list)
-                            self.send_personal_msg(left_str,uid)
-
-
-                            #检查完是否牌都出完了
-                            over = True
-                            for c in player_own_card_dict:
-                                data = player_own_card_dict[c]
-                                if data['count'] > 0:
-                                    over = False
-                                    break
-
-                            if over:
-                                self.send_room_msg(name + self.players[uid]['title'] + u'获胜,开始新局',gid)
-                                #重新发牌开始新局
-                                self.game_status = 1
-                                self.dispatch_cards(gid)
-                                self.re_dispatch_card_user_num += 1#修改下一局的出牌顺序
-                                self.last_putcards_player_num = None
-                                self.last_putcards = None
-                                next_first_player = self.get_player_by_number(self.re_dispatch_card_user_num % 3)
-                                self.send_room_msg(next_first_player['name']+u'请先叫地主',gid)
-
-                                #修改出牌人顺序
-                                self.curr_putcard_serial = self.re_dispatch_card_user_num
-                            else:
-                                self.curr_putcard_serial += 1
-
-                    else: #第一次出牌,或者其他人都不出牌,又轮到自己了
-                        self.last_putcards = cards_output_dict
-                        self.last_putcards_player_num = curr_output_player['number']
-                        #扣牌
-                        for c in player_own_card_dict:
-                            data = player_own_card_dict[c]
-                            output_count = 0
-                            if cards_output_dict.has_key(c):
-                                output_count=cards_output_dict[c]['count']
-                            if output_count > 0:
-                                data['count'] -= output_count
-
-                        #检查完是否牌都出完了
-                        over = True
-                        for c in player_own_card_dict:
-                            data = player_own_card_dict[c]
-                            if data['count'] > 0:
-                                over = False
-                                break
-
-                        if over:
-                            self.send_room_msg(name + self.players[uid]['title'] + u'获胜,开始新局',gid)
-                            #重新发牌开始新局
-                            self.game_status = 1
-                            self.dispatch_cards(gid)
-                            self.re_dispatch_card_user_num += 1#修改下一局的出牌顺序
-                            self.last_putcards_player_num = None
-                            self.last_putcards = None
-                            next_first_player = self.get_player_by_number(self.re_dispatch_card_user_num % 3)
-                            self.send_room_msg(next_first_player['name']+u'请先叫地主',gid)
-
-                            #修改出牌人顺序
-                            self.curr_putcard_serial = self.re_dispatch_card_user_num
-                        else:
-                            self.curr_putcard_serial += 1
-
-                else:
-                    self.send_room_msg(name + u'你出的牌里有些是自己没有的牌..',gid)
-                    return
-
-        elif content == u'不出' or content == u'bc' or content == u'b':
-
-            self.curr_putcard_serial += 1
+        #其他人都不出,自己再次出牌,不需要比较,直接出牌就是了
+        if not self.last_putcards_player_serial:#地主不能不出牌啊
+            self_again = True
         else:
-            self.send_room_msg(u'轮到'+ curr_output_player['name'] + u'出牌,' + name + u'请别乱哔哔..',gid)
+            self_again = (self.last_putcards_player_serial == self.curr_putcard_serial)
+        if self.players[uid]['number'] != self.curr_putcard_serial:#没到出牌顺序呢
+            self.send_room_msg(name + u'还没轮到你出牌呢,该轮到' + curr_output_player['name'] + u'出牌.',gid)
+            return
+        elif content == u'不出' or content == u'bc' or content == u'b':
+            if self_again:
+                self.send_room_msg(curr_output_player['name'] + u'上次是你出的牌,而其他人都不出,该你出牌了' + name + u'.',gid)
+                return
+            else:
+                self.curr_putcard_serial += 1
+                self.curr_putcard_serial %= 3
+                return
+        elif not is_content_cards:
+            self.send_room_msg(curr_output_player['name'] + u'请出牌',gid)
+            return
+
+
+        #玩家出牌的列表dict
+        cards_output_dict = CardStrToCardDict(content)
+
+        #检测是不是合理的牌,555+67这种不正确的直接提示错误的出牌
+        type=get_card_type(cards_output_dict)
+        if type[:2]==u'错误':
+            self.send_room_msg(name + u'你出的牌:' + type,gid)
+            return
+        #玩家拥有的牌数,list
+        player_own_card_dict = self.players[uid]['usercard_dict']
+
+        print_tree(player_own_card_dict)
+
+        print_tree(cards_output_dict)
+
+        #检查牌是不是自己有的牌
+        is_card_engouth = CheckCardEnough(player_own_card_dict,cards_output_dict)
+        if not is_card_engouth:
+            self.send_room_msg(name + u'你出的牌里有些是自己没有的牌..',gid)
+            return
+        #出的是自己有的牌
+
+
+        if self.last_putcards and (not self_again):#有上一家出的牌,并且不是自己出的,才需要比较
+            com_result = compare_cards(cards_output_dict,self.last_putcards)
+            if com_result != -1 and com_result != 0 and com_result != 1:
+                self.send_room_msg(name + u'你出的牌:' + com_result,gid)
+            if com_result <= 0: #牌没有上一家出的大
+                str=CardDictToStr(self.last_putcards)
+                self.send_room_msg(name + u'你出的牌管不起..' + str,gid)
+            else:
+                #扣牌
+                MinusCard(player_own_card_dict,cards_output_dict)
+                #剩余的牌,私聊发给玩家
+                left_str = CardDictToStr(player_own_card_dict)
+                self.send_personal_msg(left_str,uid)
+
+                #检查完是否牌都出完了
+                over = True
+                for c in player_own_card_dict:
+                    data = player_own_card_dict[c]
+                    if data['count'] > 0:
+                        over = False
+                        break
+                if over:
+                    self.send_room_msg(name + self.players[uid]['title'] + u'获胜,开始新局',gid)
+                    #重新发牌开始新局
+                    self.game_status = 1
+                    self.DispatchCards(gid)
+                    self.new_round_putcard_serial += 1#修改下一局的出牌顺序
+                    self.new_round_putcard_serial %= 3
+                    #修改出牌人顺序
+                    self.curr_putcard_serial = self.new_round_putcard_serial
+                    self.last_putcards_player_serial = None
+                    self.last_putcards = None
+                    next_first_player = self.GetPlayerBySerial(self.curr_putcard_serial)
+                    self.send_room_msg(next_first_player['name']+u'请先叫地主',gid)
+                else:
+                     #剩余的牌,私聊发给玩家
+                    left_str = CardDictToStr(player_own_card_dict)
+                    self.send_personal_msg(left_str,uid)
+                    self.curr_putcard_serial += 1
+                    self.curr_putcard_serial %= 3
+
+        else: #第一次出牌,或者其他人都不出牌,又轮到自己了
+            self.last_putcards = cards_output_dict
+            self.last_putcards_player_serial = curr_output_player['number']
+            #扣牌
+            MinusCard(player_own_card_dict,cards_output_dict)
+            #检查完是否牌都出完了
+            over = True
+            for c in player_own_card_dict:
+                data = player_own_card_dict[c]
+                if data['count'] > 0:
+                    over = False
+                    break
+
+            if over:
+                self.send_room_msg(name + self.players[uid]['title'] + u'获胜,开始新局',gid)
+                #重新发牌开始新局
+                self.game_status = 1
+                self.DispatchCards(gid)
+                self.new_round_putcard_serial += 1#修改下一局的出牌顺序
+                self.new_round_putcard_serial %= 3
+                #修改出牌人顺序
+                self.curr_putcard_serial = self.new_round_putcard_serial
+                self.last_putcards_player_serial = None
+                self.last_putcards = None
+                next_first_player = self.GetPlayerBySerial(self.curr_putcard_serial)
+                self.send_room_msg(next_first_player['name']+u'请先叫地主',gid)
+            else:
+                #剩余的牌,私聊发给玩家
+                left_str = CardDictToStr(player_own_card_dict)
+                self.curr_putcard_serial += 1
+                self.curr_putcard_serial %= 3
 
 
 def dic_set(dic,key,value):
@@ -455,12 +408,10 @@ class MyWXBot(WXBot):
                 #self.send_msg_by_uid( msg['content']['user']['name'] + u'你好,请添加群主为好友才能继续..',msg['user']['id']);
                 if self.my_account['UserName'] == uid:
                     is_friend = 1
-                    self.send_msg_by_uid('自己发送的消息',uid)
-                    #return
+                    #self.send_msg_by_uid('自己发送的消息',uid)
                 else:
                     is_friend = 0;
             else:
-                #self.send_msg_by_uid(u'机器人在群消息里回复你..',msg['content']['user']['id']);
                 is_friend = 1;
 
             room_inst = None;
@@ -474,17 +425,18 @@ class MyWXBot(WXBot):
 
                 if not self.game_rooms.has_key(group_id):
                     room_inst = GameRoom()
-                    room_inst.create_room(self,group_id,uid,name)
+                    room_inst.CreateRoom(self,group_id,uid,name)
                     dic_set(self.game_rooms,group_id,room_inst)
 
-                    self.send_msg_by_uid(name + u'输入"斗地主"创建房间\n'
-                                                u'输入"结束斗地主"销毁房间\n'
-                                                u'创建了斗地主房间,大家开来加入!\n'
+                    self.send_msg_by_uid(name + u'每个群暂时只支持一个斗地主房间'
+                                                u'创建者输入"斗地主"创建房间\n'
+                                                u'创建者输入"结束斗地主"销毁房间\n'
                                                 u'输入"开局"加入房间.\n'
                                                 u'一局结束后自动开始新局并发牌,叫地主的顺序后延'
                                                 u'234567890j(J)q(Q)k(K)a(A)\n'
                                                 u'0,表示10,W表示大王,w表示小王\n'
-                                                u'叫地主的时候输入"1分","2分","3分"或者"不叫"\n'
+                                                u'叫地主的时候输入"1","2","3"表示分数,或者"b"表示"不叫"\n'
+                                                u'创建了斗地主房间,大家快来加入!\n'
                                                 u'',group_id);
                     return
             elif data == secret_code_over:
@@ -494,15 +446,17 @@ class MyWXBot(WXBot):
 
                  if self.game_rooms.has_key(group_id):
                     room_inst = self.game_rooms[group_id]
-                    room_inst.destroy_room(self,uid)
-                    del self.game_rooms[group_id]
-                    self.game_rooms = None
+                    succ = room_inst.DestroyRoom(self,uid)
+                    if succ:
+                        del self.game_rooms[group_id]
+                        #self.game_rooms = None
+                        room_inst = None
                  return
 
 
             #如果在房间里,就把消息交给房间去处理
             if room_inst:
-                room_inst.handle_msg(name,uid,group_id,data)
+                room_inst.RoomHandleMessage(name,uid,group_id,data)
                 return
             else:
                 return
@@ -535,7 +489,7 @@ class MyWXBot(WXBot):
                 room.system_destroy_room()
         time.sleep(1000)
         '''
-        self.send_msg_by_uid('自己发送的消息',self.my_account['UserName'])
+        #self.send_msg_by_uid('自己发送的消息',self.my_account['UserName'])
 
 
 def main():

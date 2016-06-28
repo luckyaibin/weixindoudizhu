@@ -460,7 +460,7 @@ if __name__ == '__main__':
     for i in range(Len):
         c = cards[i]
         print(c)
-        if input_is_card_string(c,card_filter):
+        if input_is_card_string(c,message_is_card_filter):
             c=card_point_count_uniform(c)
             print(get_card_type(c))
     '''
